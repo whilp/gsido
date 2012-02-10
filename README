@@ -1,38 +1,24 @@
-# Cluster UI
+# gsido
 
-Run commands or an interactive session in the cluster.
+Switch to a grid user with glexec.
 
 ## Usage
 
-    $ cui -h
-    Usage: cui [options] [command]
+    $ gsido -h
+    Usage: gsido [options] [command]
 
-    Submit a UI job and connect to it when it begins to run. If <command> is
-    specified, it is executed on the remote machine. Otherwise, the current shell
-    ($SHELL) is executed.
-
-    To connect a UI job that's already running, pass its ClusterId to the '-i'
-    option. Use the special ID 'any' to automatically select a suitable running job.
-
-    By default, cui will use glexec to switch to the grid user after connecting to
-    the UI job; pass the '-g' option to disable glexec.
-
-    After the connection is terminated, the UI job's temporary directory including
-    its submit file, log file and any files transferred back from the remote
-    machine will be removed. To prevent cleanup, pass the '-P' option; since no
-    temporary directory is created when connecting to an existing job with '-i',
-    cleanup does not occur in that case, either.
+    Execute a <command> as a grid user. If <command> is not specified, run the
+    user's $SHELL. By default, the certificate or proxy specified in the environment
+    variables GLEXEC_CLIENT_CERT or X509_USER_PROXY will be used. If they are not
+    specified and /tmp/x509up_u<uid> is available, it will be used instead. A
+    certificate specified with the '-c' option will always take precedence.
 
 
     Options:
       -v VERBOSE, --verbose=VERBOSE
                             set logging level to VERBOSE
-      -P, --persist         leave UI job in the queue
-      -d SUBMIT_DIR, --submit-dir=SUBMIT_DIR
-                            create submit directory under SUBMIT_DIR
-      -g, --glexec          don't switch to grid user
-      -i ID, --id=ID        connect to existing job ID
-      -p, --preserve        preserve temporary job directory
-      -r REMOTE, --remote=REMOTE
-                            operate in remote (client) mode; internal
+      -c CERTIFICATE, --certificate=CERTIFICATE
+                            use grid certificate or proxy CERTIFICATE
+      -p PHASE, --phase=PHASE
+                            glexec phase; internal
       -h, --help            show this help message and exit
