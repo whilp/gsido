@@ -70,8 +70,20 @@ def run(args, env=os.environ, shell="/bin/bash", **kwargs):
     if args:
         shell.extend(["-c", " ".join(args)])
 
-    log.debug("running `%s %s`", shell[0], " ".join(repr(x) for x in shell[1:]))
-    return os.execv(shell[0], shell)
+    command =  "%s %s" % (shell[0], " ".join(repr(x) for x in shell[1:]))
+    log.debug("running `%s`", command)
+    ret = os.spawnv(os.P_WAIT, shell[0], shell)
+    log.debug("command `%s` returned %d", command, ret)
+
+    tmpproxy = os.environ.get("GLEXEC_TARGET_PROXY")
+    if tmpproxy:
+        try:
+            os.unlink(tmpproxy)
+            log.debug("removed temporary proxy %s", tmpproxy)
+        except OSError, e:
+            log.warn("failed to remove temporary proxy (%d): %s", *e.args)
+    
+    return ret
 
 def preglexec(args, verbose=0, **kwargs):
     """Prepare the runtime environment for glexec.
