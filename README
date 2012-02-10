@@ -22,3 +22,10 @@ Switch to a grid user with glexec.
       -p PHASE, --phase=PHASE
                             glexec phase; internal
       -h, --help            show this help message and exit
+
+## Notes
+
+In glexec versions >= 0.8, the 'create_target_proxy' configuration value in
+/etc/glexec.conf should be set to 'yes' (the default). When set to 'no',
+commands run under gsido will not be able to read the original proxy, and so
+$X509_USER_PROXY won't have a sensible value.
