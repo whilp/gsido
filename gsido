@@ -50,7 +50,6 @@ def main():
         cert = os.environ.get("GLEXEC_CLIENT_CERT",
             os.environ.get("X509_USER_PROXY",
                 "/tmp/x509up_u%d" % os.getuid()))
-    log.debug("using certificate/proxy %s", cert)
 
     os.environ["GLEXEC_CLIENT_CERT"] = cert
 
@@ -117,6 +116,7 @@ def preglexec(args, verbose=0, **kwargs):
         log.warn(fail, cert)
         return 1
 
+    log.debug("using certificate/proxy %s", cert)
 
     # https://www.nikhef.nl/pub/projects/grid/gridwiki/index.php/GLExec_Environment_Wrap_and_Unwrap_scripts
     log.debug("preparing environment for glexec")
