@@ -59,7 +59,7 @@ def main():
     fail = None
     if not os.path.isfile(cert):
         fail = "grid certificate %s is not a file"
-    elif not os.access(cert, os.R_OK)):
+    elif not os.access(cert, os.R_OK):
         fail = "cannot read grid certificate %s"
 
     if fail:
