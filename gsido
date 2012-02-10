@@ -71,8 +71,6 @@ def phase(args, phase="run", **kwargs):
     *phase*. *args* and *kwargs* are passed directly to the selected phase
     function.
     """
-    log.debug("beginning phase %s", phase)
-
     fn = phases.get(phase, preglexec)
     return fn(args, **kwargs)
 
