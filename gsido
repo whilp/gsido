@@ -33,9 +33,6 @@ from subprocess import CalledProcessError, Popen, PIPE
 from tempfile import mkdtemp
 from time import sleep
 
-RUNTIME = 3600
-SLEEP = "/bin/sleep"
-
 log = logging.getLogger(__name__)
 
 def main():
@@ -47,102 +44,52 @@ def main():
         log.level = max(1, logging.WARNING - (10 * verbose))
         log.addHandler(logging.StreamHandler())
 
-    # Short circuit if we're in remote mode.
-    if opts.remote:
-        return remote(args, **vars(opts))
-
-    SUBMIT["executable"] = SLEEP
-    SUBMIT["arguments"] = RUNTIME
-
-    hascvmfs(SUBMIT)
-    if opts.x509:
-        hasx509(SUBMIT)
-
-    remoteargs = ["-t", getexecp(sys.argv[0]), "-v", str(verbose)]
-    phase = "run"
+    if not getexec("glexec"):
+        log.critical("could not find glexec")
+        return 1
 
     user = getuser()
-    cert = os.environ.get("GLEXEC_CLIENT_CERT",
-        os.environ.get("X509_USER_PROXY",
-            "/tmp/x509up_u%d" % os.getuid()))
+    cert = opts.certificate
+    if not cert:
+        cert = os.environ.get("GLEXEC_CLIENT_CERT",
+            os.environ.get("X509_USER_PROXY",
+                "/tmp/x509up_u%d" % os.getuid()))
+    log.debug("using certificate/proxy %s", cert)
 
-    if opts.glexec and os.path.isfile(cert) and os.access(cert, os.R_OK):
-        log.debug("configuring glexec using cert %s", cert)
-        # The cert will end up in the scratch directory on the remote end.
-        os.environ["GLEXEC_CLIENT_CERT"] = os.path.basename(cert)
-        phase = "preglexec"
+    fail = None
+    if not os.path.isfile(cert):
+        fail = "grid certificate %s is not a file"
+    elif not os.access(cert, os.R_OK)):
+        fail = "cannot read grid certificate %s"
 
-    remoteargs.extend(["-r", phase, "--"])
+    if fail:
+        log.warn(fail, cert)
+        return 1
 
-    jobid = opts.id
-    if jobid == "any":
-        jobid = discover(user)
-        if not jobid:
-            log.warn("failed to find a running UI job")
+    os.environ["GLEXEC_CLIENT_CERT"] = cert
 
-    if jobid:
-        # Connecting to an existing job, so no tempdir needed.
-        create = preserve = dir = prefix = None
-    else:
-        create = True
-        prefix = "%s-%s-" % ("clusterui", user)
-        preserve = opts.preserve or opts.persist
-        dir = os.path.abspath(opts.submit_dir) if opts.submit_dir else None
-
-    with submitdir(cleanup=not preserve, dir=dir, prefix=prefix, create=True) as tmp:
-        try:
-            if not jobid:
-                jobid = submit(tmp, SUBMIT, **vars(opts))
-            condor_ssh_to_job = connect(jobid, remoteargs + args)
-            ret = condor_ssh_to_job.returncode
-        except ProcessError, e:
-            # Command failed, bail.
-            log.debug("%s returned %d", e.process.cmd, e.returncode)
-            if e.process.stdout:
-                sys.stdout.write(e.process.stdout.read())
-            if e.process.stderr:
-                sys.stderr.write(e.process.stderr.read())
-
-            ret = e.returncode
-
-    try:
-        cleanupjob(tmp, user)
-    except ProcessError:
-        pass
-
-    return ret
+    return phase(args, **vars(opts))
 
 options = [
     Opt("-v", "--verbose", default=0, help="set logging level to VERBOSE"),
 
-    Opt("-P", "--persist", default=False, action="store_true",
-        help="leave UI job in the queue"),
-    Opt("-d", "--submit-dir", default=None,
-        help="create submit directory under SUBMIT_DIR"),
-    Opt("-g", "--glexec", default=True, action="store_false",
-        help="don't switch to grid user"),
-    Opt("-i", "--id", default=None, action="store",
-        help="connect to existing job ID"),
-    Opt("-p", "--preserve", default=False, action="store_true",
-        help="preserve temporary job directory"),
-    Opt("-r", "--remote", default=None, action="store",
-        help="operate in remote (client) mode; internal"),
-    Opt("-x", "--x509", default=True, action="store_false",
-        help="disable X509 proxy detection"),
+    Opt("-c", "--certificate", default=None, action="store",
+        help="use grid certificate or proxy CERTIFICATE"),
+    Opt("-p", "--phase", default=None, action="store",
+        help="glexec phase; internal"),
 ]
 
-def remote(args, remote="run", **kwargs):
-    """Begin a session on the remote side.
+def phase(args, phase="run", **kwargs):
+    """Begin a glexec session.
 
     Delegates to one of the phase functions (see :data:`phases`) keyed by
-    *remote*. *args* and *kwargs* are passed directly to the selected phase
+    *phase*. *args* and *kwargs* are passed directly to the selected phase
     function.
     """
-    phase = remote
-    log.debug("beginning remote phase %s", phase)
+    log.debug("beginning phase %s", phase)
 
     fn = phases.get(phase, run)
-    fn(args, **kwargs)
+    return fn(args, **kwargs)
 
 def run(args, env=os.environ, shell="/bin/bash", **kwargs):
     """Executes a shell.
@@ -169,20 +116,16 @@ def preglexec(args, verbose=0, **kwargs):
     storing the result in the `GLEXEC_ENV` environment variable for later
     restoration.
     """
-    if not getexec("glexec"):
-        log.warn("could not find remote glexec")
-        run(args, **kwargs)
-
     # https://www.nikhef.nl/pub/projects/grid/gridwiki/index.php/GLExec_Environment_Wrap_and_Unwrap_scripts
     log.debug("preparing environment for glexec")
     env = dict(os.environ.copy())
     env["GLEXEC_ENV"] = envencode(env)
     glexecargs = [sys.executable, getexecp(sys.argv[0]),
         "-v", str(verbose),
-        "-r", "postglexec", "--"]
+        "-p", "postglexec", "--"]
     glexecargs.extend(args)
     log.debug("running `glexec %s`", " ".join(repr(x) for x in glexecargs))
-    os.execvpe("glexec", glexecargs, env)
+    return os.execvpe("glexec", glexecargs, env)
 
 def postglexec(args, **kwargs):
     """Restore the runtime environment after glexec.
@@ -195,9 +138,9 @@ def postglexec(args, **kwargs):
     env = envdecode(os.environ.pop("GLEXEC_ENV"))
     os.environ.update(env)
 
-    run(args, **kwargs)
+    return run(args, **kwargs)
 
-# Remote runtime phases.
+# Glexec phases.
 phases = dict(
     preglexec=preglexec,
     postglexec=postglexec,
@@ -206,8 +149,7 @@ phases = dict(
 envblacklist = ("HOME", "LOGNAME", "USER", "X509_USER_PROXY", "_")
 def envblacklisted(key, blacklist=envblacklist):
     """Return False if *key* should be excluded from the post-glexec environment."""
-    return key in envblacklist \
-        or key.startswith("_CONDOR")
+    return key in envblacklist
 
 def envencode(env):
     """Encode environment dictionary *env*.
@@ -232,113 +174,6 @@ def envdecode(env):
     return dict(
         b64decode(blob).split("=", 1) for blob in blobs
     )
-
-def discover(user):
-    """Find running UI jobs for *user*.
-
-    Returns a single jobid string or None if no jobs are found. *user* is a
-    string username matching a Condor 'Owner' ClassAd.
-    """
-    condor_q = Process(["condor_q",
-        "-con", (
-            "IsUIJob == true && "
-            'Owner == "{user}" && '
-            "JobStatus == {running}").format(user=user, running=2),
-        "-f", "%s\n", "ClusterId"])
-    condor_q.check()
-
-    jobids = condor_q.stdout.read().splitlines()
-    log.debug("discovered %d active UI jobs", len(jobids))
-    if jobids:
-        return jobids[0]
-
-def connect(jobid, args):
-    """Connect to running UI job *jobid*.
-
-    Executes `condor_ssh_to_job` with *args* and returns a :class:`Process`
-    object. Raises :class:`ProcessError` if `condor_ssh_to_job` returns a value
-    other than 0.
-    """
-    log.info("connecting to job")
-
-    condor_ssh_to_job = Process(["condor_ssh_to_job", jobid] + args,
-        stdout=None, stderr=None)
-    try:
-        condor_ssh_to_job.check()
-    except ProcessError:
-        log.warn("failed to connect to job %s", jobid)
-        raise
-
-    return condor_ssh_to_job
-
-def submit(tmp, jdl, **kwargs):
-    """Submit a UI job described by *jdl* and found in the *tmp* directory.
-
-    *tmp* is a path to a temporary directory. The *jdl* mapping is passed to
-    :func:`template` and its output is written to a new file named `submit` in
-    *tmp*. The job is submitted using `condor_submit` and its log is monitored
-    until the job begins running. Returns the string ID of the running job.
-    *kwargs* are currently ignored. Raises :class:`ProcessError` if
-    `condor_submit` returns a value other than 0.
-    """
-    with open(os.path.join(tmp, "submit"), 'w') as submit:
-        log.debug("writing submit file to %s", submit.name)
-        template(submit, SUBMIT.items())
-        submit = submit.name
-
-    log.info("submitting UI job")
-    condor_submit = Process(["condor_submit", submit])
-    try:
-        condor_submit.check()
-    except ProcessError:
-        log.debug("failed to submit UI job")
-        raise
-
-    log.info("waiting for job to begin to run")
-    with open(os.path.join(tmp, "log")) as logfile:
-        jobid = monitor(tail(logfile))
-
-    return jobid
-
-def cleanupjob(iwd, user):
-    """Clean up after a job.
-
-    Searches for a job with a working directory set to *iwd* owned by *user* and
-    removes it from the queue.
-    """
-    condor_rm  = Process(["condor_rm",
-        "-con", 'IsUIJob =?= true && '
-                'Owner == "{user}" && '
-                'Iwd == "{iwd}"'.format(user=user, iwd=iwd),
-        ])
-    condor_rm.check()
-
-def hasx509(submit):
-    """Update JDL mapping *submit* with 'X509UserProxy if a proxy is found."""
-    x509 = os.environ.get("X509_USER_PROXY", "/tmp/x509up_u%s" % os.getuid())
-    if os.path.exists(x509):
-        # XXX: Can cause condor_submit to fail if a stale/expired proxy is
-        # present.
-        submit["X509UserProxy"] = x509
-        return x509
-
-def hascvmfs(submit):
-    """Update JDL mapping *submit*'s 'requirements' expression.
-
-    If a CVMFS mount is found, require that TARGET advertize a CVMFS catalog
-    revision greater than or equal to the local catalog revision. Otherwise,
-    require a revision greater than 0.
-    """
-    cmscvmfs = "/cvmfs/cms.hep.wisc.edu"
-    try:
-        with open(os.devnull, 'w') as null:
-            attr = Process(["attr", "-q", "-g", "revision", cmscvmfs], stdout=PIPE, stderr=null)
-        cvmfsrev = attr.stdout.read()
-    except (ProcessError, OSError):
-        cvmfsrev = "0"
-        
-    submit["requirements"] = (submit.setdefault("requirements", "TRUE") +
-        " && TARGET.UWCMS_CVMFS_Revision >= %s" % cvmfsrev)
 
 def isexec(path):
     """Return True if *path* exists and is an executable file."""
@@ -379,132 +214,6 @@ def getexecp(path):
     See :func:`getexec`.
     """
     return os.path.abspath(getexec(path))
-
-def tail(file):
-    """Read lines as they're appended to *file*.
-
-    *file* should have a `readline` method that returns a string. If the string
-    is empty, this function will sleep briefly before calling `readline` again.
-    Yields lines returned by `readline` indefinitely.
-    """
-    while True:
-        line = file.readline()
-        if not line:
-            sleep(.2)
-        else:
-            yield line
-
-def monitor(stream):
-    """Monitor a stream of Condor job logs.
-
-    *stream* is an iterable that yields string lines. Lines containing only
-    '...' and a newline are ignored. Other lines are split into four fields by
-    whitespace and used to create :class:`Record` objects. Runs until a
-    :attr:`Record.message` indicates that the job has begun executing and
-    returns the string job ID.
-    """
-    for line in stream:
-        if line == "...\n":
-            continue
-        record = Record(*line.split(None, 4))
-        log.debug("log update: %s", line.strip())
-        if "Job executing" in record.message:
-            return record.id.strip("()")
-
-@contextmanager
-def submitdir(cleanup=True, create=True, **kwargs):
-    """Create a submit directory, removing it and its contents.
-
-    *kwargs* are passed to :func:`mkdtemp` to create a temporary directory if
-    *create* is True. Sets the current working directory to the temporary
-    directory and yields control. Then, if *cleanup* and *create* are True,
-    calls :func:`cleanup` and removes the temporary directory and its contents.
-    """
-    if create:
-        tmp = mkdtemp(**kwargs)
-        log.debug("created temporary directory %s", tmp)
-        os.chdir(tmp)
-
-    try:
-        yield tmp
-    finally:
-        if not (cleanup and create):
-            return
-
-        log.debug("cleaning up temporary directory %s", tmp)
-        rmtree(tmp)
-
-def template(out, context):
-    """Format iterable JDL *context* and write it to *out*.
-
-    *out* should be a file-like object with a `write` method. *context* should
-    be an iterable with (*key*, *value*) pairs.
-    """
-    out.write("\n".join("%s = %s" % (k, v) for k, v in context))
-    out.write("\n")
-    out.write("queue\n")
-
-class ProcessError(CalledProcessError):
-    """Raised when a :class:`Process` fails.
-    
-    Prepares the arguments for :class:`subprocess.CalledProcessError` using
-    *process* and stores it in :attr:`process` for later inspection.
-    """
-    
-    def __init__(self, process=None, **kwargs):
-        super(ProcessError, self).__init__(
-            process.returncode, 
-            ' '.join(process.args),
-            **kwargs)
-        self.process = process
-
-class Process(Popen):
-    """A process.
-
-    Stores *args* in :attr:`args` and formats :attr:`cmd` for later inspection.
-    """
-    
-    def __init__(self, args, stdout=PIPE, stderr=PIPE, **kwargs):
-        self.args = args
-        self.cmd = args[0] + " " + " ".join(repr(x) for x in args[1:])
-        super(Process, self).__init__(args, 
-            stdout=stdout,
-            stderr=stderr,
-            **kwargs)
-
-    def _execute_child(self, *args, **kwargs):
-        """Log a command before executing it."""
-        log.debug("running `%s`", self.cmd)
-        return super(Process, self)._execute_child(*args, **kwargs)
-
-    def check(self):
-        """Wait for the process to return, raising :class:`ProcessError` if it returns a value other than 0."""
-        ret = self.wait()
-
-        if ret != 0:
-            raise ProcessError(self)
-
-
-# Default JDL.
-SUBMIT = dict(
-    universe="vanilla",
-    notification="never",
-    log="log",
-    transfer_executable="false",
-    should_transfer_files="true",
-    when_to_transfer_output="on_exit",
-    getenv="true",
-    requirements=(
-        'TARGET.Arch == "X86_64" && '
-        'TARGET.HasAFS_OSG && IsSlowSlot=!=true && '
-        'TARGET.IsDedicated =?= true && '
-        'TARGET.UidDomain == "hep.wisc.edu"'
-    ),
-)
-SUBMIT["+IsUIJob"] = "true"
-
-Record = namedtuple("Record", "entry id date time message")
-"""A Condor job log record."""
 
 if __name__ == "__main__":
     try:
