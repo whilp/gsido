@@ -67,8 +67,7 @@ def run(args, env=os.environ, shell="/bin/bash", **kwargs):
     shell = [env.get("SHELL", shell)]
 
     if args:
-        shell.append("-c")
-    shell.extend(args)
+        shell.extend(["-c", " ".join(args)])
 
     log.debug("running `%s %s`", shell[0], " ".join(repr(x) for x in shell[1:]))
     return os.execv(shell[0], shell)
