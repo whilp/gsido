@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 
 def main():
     optparser = OptionParser(usage=__doc__, option_list=options)
+    optparser.disable_interspersed_args()
     (opts, args) = optparser.parse_args()
 
     verbose = int(opts.verbose)
